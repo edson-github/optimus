@@ -78,10 +78,13 @@ INIT_CONTAINER_IMAGE = "raystack/optimus:dev"
 INIT_CONTAINER_ENTRYPOINT = "/opt/entrypoint_init_container.sh"
 
 def get_entrypoint_cmd(plugin_entrypoint_script):
-    path_config = JOB_DIR + "/in/.env"
-    path_secret = JOB_DIR + "/in/.secret"
-    entrypoint = "set -o allexport; source {path_config}; set +o allexport; cat {path_config}; ".format(path_config=path_config)
-    entrypoint += "set -o allexport; source {path_secret}; set +o allexport; ".format(path_secret=path_secret)
+    path_config = f"{JOB_DIR}/in/.env"
+    path_secret = f"{JOB_DIR}/in/.secret"
+    entrypoint = "set -o allexport; source {path_config}; set +o allexport; cat {path_config}; ".format(
+        path_config=path_config
+    ) + "set -o allexport; source {path_secret}; set +o allexport; ".format(
+        path_secret=path_secret
+    )
     return entrypoint + plugin_entrypoint_script
 
 volume = k8s.V1Volume(
