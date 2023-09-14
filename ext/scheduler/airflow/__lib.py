@@ -56,8 +56,7 @@ class SuperKubernetesPodOperator(KubernetesPodOperator):
 
     def render_init_containers(self, context):
         for ic in self.init_containers:
-            env = getattr(ic, 'env')
-            if env:
+            if env := getattr(ic, 'env'):
                 self.render_template(env, context)
 
     def execute(self, context):
@@ -73,7 +72,7 @@ class OptimusAPIClient:
     def _add_connection_adapter_if_absent(self, host):
         if host.startswith("http://") or host.startswith("https://"):
             return host
-        return "http://" + host
+        return f"http://{host}"
 
     def get_job_run(self, optimus_project: str, optimus_job: str, startDate: str, endDate: str) -> dict:
         url = '{optimus_host}/api/v1beta1/project/{optimus_project}/job/{optimus_job}/run'.format(
@@ -101,10 +100,14 @@ class OptimusAPIClient:
 
 
     def get_job_run_input(self, execution_date: str, project_name: str, job_name: str, job_type: str, instance_name: str) -> dict:
-        response = requests.post(url="{}/api/v1beta1/project/{}/job/{}/run_input".format(self.host, project_name, job_name),
-                      json={'scheduled_at': execution_date,
-                            'instance_name': instance_name,
-                            'instance_type': "TYPE_" + job_type.upper()})
+        response = requests.post(
+            url=f"{self.host}/api/v1beta1/project/{project_name}/job/{job_name}/run_input",
+            json={
+                'scheduled_at': execution_date,
+                'instance_name': instance_name,
+                'instance_type': f"TYPE_{job_type.upper()}",
+            },
+        )
 
         self._raise_error_if_request_failed(response)
         return response.json()
@@ -137,7 +140,9 @@ class OptimusAPIClient:
         if response.status_code != 200:
             log.error("Request to optimus returned non-200 status code. Server response:\n")
             log.error(response.json())
-            raise AssertionError("request to optimus returned non-200 status code. url: " + response.url)
+            raise AssertionError(
+                f"request to optimus returned non-200 status code. url: {response.url}"
+            )
 
 
 class JobSpecTaskWindow:
@@ -209,8 +214,8 @@ class SuperExternalTaskSensor(BaseSensorOperator):
         try:
             upstream_schedule = self.get_schedule_interval(schedule_time)
         except Exception as e:
-            self.log.warning("error while fetching upstream schedule :: {}".format(e))
-            context[SCHEDULER_ERR_MSG] = "error while fetching upstream schedule :: {}".format(e)
+            self.log.warning(f"error while fetching upstream schedule :: {e}")
+            context[SCHEDULER_ERR_MSG] = f"error while fetching upstream schedule :: {e}"
             return False
 
         last_upstream_schedule_time, _ = self.get_last_upstream_times(
@@ -221,15 +226,15 @@ class SuperExternalTaskSensor(BaseSensorOperator):
         schedule_time_window_start, schedule_time_window_end = task_window.get_schedule_window(
             last_upstream_schedule_time.strftime(TIMESTAMP_FORMAT), upstream_schedule)
 
-        self.log.info("waiting for upstream runs between: {} - {} schedule times of airflow dag run".format(
-            schedule_time_window_start, schedule_time_window_end))
+        self.log.info(
+            f"waiting for upstream runs between: {schedule_time_window_start} - {schedule_time_window_end} schedule times of airflow dag run"
+        )
 
         # a = 0/0
         if not self._are_all_job_runs_successful(schedule_time_window_start, schedule_time_window_end):
-            self.log.warning("unable to find enough successful executions for upstream '{}' in "
-                             "'{}' dated between {} and {}(inclusive), rescheduling sensor".
-                             format(self.optimus_job, self.optimus_project, schedule_time_window_start,
-                                    schedule_time_window_end))
+            self.log.warning(
+                f"unable to find enough successful executions for upstream '{self.optimus_job}' in '{self.optimus_project}' dated between {schedule_time_window_start} and {schedule_time_window_end}(inclusive), rescheduling sensor"
+            )
             return False
         return True
 
@@ -244,8 +249,7 @@ class SuperExternalTaskSensor(BaseSensorOperator):
         schedule_time_str = schedule_time.strftime(TIMESTAMP_FORMAT)
         job_metadata = self._upstream_optimus_client.get_job_metadata(schedule_time_str, self.optimus_namespace,
                                                              self.optimus_project, self.optimus_job)
-        upstream_schedule = lookup_non_standard_cron_expression(job_metadata['spec']['interval'])
-        return upstream_schedule
+        return lookup_non_standard_cron_expression(job_metadata['spec']['interval'])
 
     # TODO the api will be updated with getJobRuns even though the field here refers to scheduledAt
     #  it points to execution_date
@@ -253,13 +257,13 @@ class SuperExternalTaskSensor(BaseSensorOperator):
         try:
             api_response = self._upstream_optimus_client.get_job_run(self.optimus_project, self.optimus_job,
                                                             schedule_time_window_start, schedule_time_window_end)
-            self.log.info("job_run api response :: {}".format(api_response))
+            self.log.info(f"job_run api response :: {api_response}")
         except Exception as e:
-            self.log.warning("error while fetching job runs :: {}".format(e))
+            self.log.warning(f"error while fetching job runs :: {e}")
             raise AirflowFailException(e)
         for job_run in api_response['jobRuns']:
             if job_run['state'] != 'success':
-                self.log.info("failed for run :: {}".format(job_run))
+                self.log.info(f"failed for run :: {job_run}")
                 return False
         return True
 
@@ -299,12 +303,12 @@ def optimus_notify(context, event_meta):
     failure_message = ", ".join(failure_messages)
 
     if SCHEDULER_ERR_MSG in event_meta.keys():
-        failure_message = failure_message + ", " + event_meta[SCHEDULER_ERR_MSG]
-    if len(failure_message)>0:
+        failure_message = f"{failure_message}, {event_meta[SCHEDULER_ERR_MSG]}"
+    if failure_message != "":
         log.info(f'failures: {failure_message}')
-    
+
     task_instance = context.get('task_instance')
-    
+
     if event_meta["event_type"] == "TYPE_FAILURE" :
         dag_run = context['dag_run']
         tis = dag_run.get_task_instances()
@@ -386,10 +390,7 @@ def operator_start_event(context):
         if run_type == "SENSOR":
             if not shouldSendSensorStartEvent(context):
                 return
-        meta = {
-            "event_type": "TYPE_{}_START".format(run_type),
-            "status": "running"
-        }
+        meta = {"event_type": f"TYPE_{run_type}_START", "status": "running"}
         optimus_notify(context, meta)
     except Exception as e:
         print(e)
@@ -397,10 +398,7 @@ def operator_start_event(context):
 def operator_success_event(context):
     try:
         run_type = get_run_type(context)
-        meta = {
-            "event_type": "TYPE_{}_SUCCESS".format(run_type),
-            "status": "success"
-        }
+        meta = {"event_type": f"TYPE_{run_type}_SUCCESS", "status": "success"}
         optimus_notify(context, meta)
     except Exception as e:
         print(e)
@@ -409,10 +407,7 @@ def operator_success_event(context):
 def operator_retry_event(context):
     try:
         run_type = get_run_type(context)
-        meta = {
-            "event_type": "TYPE_{}_RETRY".format(run_type),
-            "status": "retried"
-        }
+        meta = {"event_type": f"TYPE_{run_type}_RETRY", "status": "retried"}
         optimus_notify(context, meta)
     except Exception as e:
         print(e)
@@ -421,10 +416,7 @@ def operator_retry_event(context):
 def operator_failure_event(context):
     try:
         run_type = get_run_type(context)
-        meta = {
-            "event_type": "TYPE_{}_FAIL".format(run_type),
-            "status": "failed"
-        }
+        meta = {"event_type": f"TYPE_{run_type}_FAIL", "status": "failed"}
         if SCHEDULER_ERR_MSG in context.keys():
             meta[SCHEDULER_ERR_MSG] = context[SCHEDULER_ERR_MSG]
 
@@ -442,21 +434,25 @@ def optimus_sla_miss_notify(dag, task_list, blocking_task_list, slas, blocking_t
         if slamiss_alert != 1:
             return "suppressed slamiss alert"
 
-        sla_list = []
-        for sla in slas:
-            sla_list.append({
+        sla_list = [
+            {
                 'task_id': sla.task_id,
                 'dag_id': sla.dag_id,
-                'scheduled_at' : dag.following_schedule(sla.execution_date).strftime(TIMESTAMP_FORMAT),
-                'airflow_execution_time': sla.execution_date.strftime(TIMESTAMP_FORMAT),
-                'timestamp': sla.timestamp.strftime(TIMESTAMP_FORMAT)
-            })
-
+                'scheduled_at': dag.following_schedule(
+                    sla.execution_date
+                ).strftime(TIMESTAMP_FORMAT),
+                'airflow_execution_time': sla.execution_date.strftime(
+                    TIMESTAMP_FORMAT
+                ),
+                'timestamp': sla.timestamp.strftime(TIMESTAMP_FORMAT),
+            }
+            for sla in slas
+        ]
         current_dag_id = dag.dag_id
         webserver_url = conf.get(section='webserver', key='base_url')
         message = {
             "slas": sla_list,
-            "job_url": "{}/tree?dag_id={}".format(webserver_url, current_dag_id),
+            "job_url": f"{webserver_url}/tree?dag_id={current_dag_id}",
         }
 
         event = {
@@ -636,6 +632,4 @@ class ExternalHttpSensor(BaseSensorOperator):
     def poke(self, context: 'Context') -> bool:
         self.log.info('Poking: %s', self.endpoint)
         r = requests.get(url=self.endpoint, headers=self.headers, params=self.request_params)
-        if (r.status_code >= 200 and r.status_code <= 300):
-            return True
-        return False
+        return r.status_code >= 200 and r.status_code <= 300
